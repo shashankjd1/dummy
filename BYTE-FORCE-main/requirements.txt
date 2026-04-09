@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+tiktoken
+scikit-learn
+reportlab
