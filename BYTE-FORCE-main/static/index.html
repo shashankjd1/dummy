@@ -3,362 +3,255 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TokenScope | Smart LLM Prompt Analyzer</title>
-    <meta name="description" content="TokenScope lets you analyze, score, and trim your LLM prompts to save token costs — with a beautiful heatmap, smart trimming, and per-model cost insights.">
-
-    <!-- Google Fonts -->
+    <title>TokenScope — AI Token Analysis</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-
-    <!-- Chart.js CDN -->
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..800;1,9..40,400..700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-
-    <!-- App Stylesheet -->
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+    <div class="dash-bg" aria-hidden="true"></div>
+    <div class="dash-noise" aria-hidden="true"></div>
 
-    <!-- Animated background orbs -->
-    <div class="bg-orbs" aria-hidden="true">
-        <div class="orb orb-1"></div>
-        <div class="orb orb-2"></div>
-        <div class="orb orb-3"></div>
-    </div>
-
-    <div class="page-wrapper">
-
-        <!-- ══════════ HEADER ══════════ -->
-        <header class="site-header">
-            <div class="header-inner">
-                <div class="logo">
-                    <svg class="logo-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                        <rect width="32" height="32" rx="8" fill="url(#logoGrad)"/>
-                        <path d="M8 10h16M8 16h10M8 22h13" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
-                        <circle cx="24" cy="22" r="3" fill="#fff" opacity="0.8"/>
-                        <defs>
-                            <linearGradient id="logoGrad" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
-                                <stop stop-color="#6366f1"/>
-                                <stop offset="1" stop-color="#8b5cf6"/>
-                            </linearGradient>
-                        </defs>
-                    </svg>
-                    <span class="logo-text">Token<span class="logo-accent">Scope</span></span>
-                </div>
-                <nav class="header-badges" aria-label="Tech stack badges">
-                    <span class="badge">FastAPI</span>
-                    <span class="badge">tiktoken</span>
-                    <span class="badge">TF-IDF</span>
-                    <span class="badge badge-green">v3.0</span>
-                </nav>
+    <div class="app-shell">
+        <header class="dash-header glass-panel">
+            <div class="dash-brand">
+                <span class="dash-logo-mark"></span>
+                <span class="dash-logo-type">Token<span class="accent">Scope</span></span>
+            </div>
+            <nav class="dash-tabs" role="tablist" aria-label="Main">
+                <button type="button" class="dash-tab active" role="tab" aria-selected="true" data-tab="analyzer" id="tab-analyzer">Analyzer</button>
+                <button type="button" class="dash-tab" role="tab" aria-selected="false" data-tab="compare" id="tab-compare">Compare</button>
+                <button type="button" class="dash-tab" role="tab" aria-selected="false" data-tab="conversation" id="tab-conversation">Conversation</button>
+                <button type="button" class="dash-tab" role="tab" aria-selected="false" data-tab="history" id="tab-history">History</button>
+            </nav>
+            <div class="dash-header-tools">
+                <label class="sr-only" for="global-model">Model</label>
+                <select id="global-model" class="dash-select" title="Pricing model">
+                    <option value="gpt-4o-mini">GPT-4o Mini</option>
+                    <option value="gpt-4o">GPT-4o</option>
+                    <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                </select>
             </div>
         </header>
 
-        <!-- ══════════ HERO ══════════ -->
-        <section class="hero" aria-labelledby="hero-title">
-            <h1 id="hero-title" class="hero-title">
-                Analyze &amp; Optimize<br>
-                <span class="gradient-text">Your LLM Prompts</span>
-            </h1>
-            <p class="hero-subtitle">
-                Get token-level heatmaps, smart filler removal, and real cost savings across GPT models — all locally, no API key needed.
-            </p>
+        <p class="dash-tagline">Prompt optimization · token intelligence · cost control — runs locally.</p>
+
+        <!-- ========== ANALYZER ========== -->
+        <section id="panel-analyzer" class="tab-panel is-active" role="tabpanel" aria-labelledby="tab-analyzer">
+            <div class="panel glass-panel">
+                <div class="panel-head">
+                    <h2 class="panel-h2">Prompt input</h2>
+                    <div class="panel-actions">
+                        <button type="button" id="analyze-btn" class="btn btn-primary">
+                            <span class="btn-text">Analyze</span>
+                            <span class="btn-loading" hidden><span class="spin"></span> Running…</span>
+                        </button>
+                        <button type="button" id="download-pdf-btn" class="btn btn-ghost" disabled>PDF</button>
+                        <button type="button" id="download-json-btn" class="btn btn-ghost" disabled>JSON</button>
+                    </div>
+                </div>
+                <p class="pricing-inline" id="pricing-info"></p>
+                <textarea id="prompt-input" class="dash-textarea" rows="10" placeholder="Paste your prompt…" aria-label="Prompt"></textarea>
+                <div class="chips" id="example-chips">
+                    <button type="button" class="chip" data-example="Could you please kindly help me write a very detailed Python script for image classification? I was wondering if you could add comments.">Verbose</button>
+                    <button type="button" class="chip" data-example="Summarize this article in under 100 words, main points only.">Concise</button>
+                </div>
+            </div>
+
+            <div id="analyzer-results" class="analyzer-results hidden-until-result">
+                <div class="stat-grid glass-panel">
+                    <div class="stat-tile glow-hover">
+                        <span class="stat-k">Total tokens</span>
+                        <span class="stat-v" id="st-total">—</span>
+                    </div>
+                    <div class="stat-tile glow-hover">
+                        <span class="stat-k">Unique (BPE)</span>
+                        <span class="stat-v" id="st-unique">—</span>
+                    </div>
+                    <div class="stat-tile glow-hover">
+                        <span class="stat-k">Unique words</span>
+                        <span class="stat-v" id="st-words">—</span>
+                    </div>
+                    <div class="stat-tile glow-hover">
+                        <span class="stat-k">Repetition rate</span>
+                        <span class="stat-v" id="st-rep">—</span>
+                    </div>
+                    <div class="stat-tile glow-hover">
+                        <span class="stat-k">Stopword %</span>
+                        <span class="stat-v" id="st-sw">—</span>
+                    </div>
+                    <div class="stat-tile stat-tile-accent glow-hover">
+                        <span class="stat-k">Efficiency score</span>
+                        <span class="stat-v" id="st-eff">—</span>
+                    </div>
+                </div>
+
+                <div class="two-col">
+                    <div class="panel glass-panel">
+                        <h3 class="panel-h3">Cost</h3>
+                        <div class="cost-row"><span>Before</span><strong id="cost-before">—</strong></div>
+                        <div class="cost-row"><span>After</span><strong id="cost-after">—</strong></div>
+                        <div class="cost-row save"><span>Tokens saved</span><strong id="cost-saved">—</strong></div>
+                        <div class="cost-row save"><span>Reduction</span><strong id="cost-pct">—</strong></div>
+                    </div>
+                    <div class="panel glass-panel">
+                        <h3 class="panel-h3">Noise &amp; repetition</h3>
+                        <p class="noise-level" id="noise-level">—</p>
+                        <p class="micro-label">Suggested removals</p>
+                        <div class="pill-list" id="noise-list"></div>
+                        <p class="micro-label">Top repeats</p>
+                        <div class="pill-list mono" id="rep-list"></div>
+                    </div>
+                </div>
+
+                <div class="panel glass-panel">
+                    <h3 class="panel-h3">POS distribution <span class="badge-soft" id="pos-badge">spaCy</span></h3>
+                    <div class="chart-box">
+                        <canvas id="chart-pos"></canvas>
+                    </div>
+                </div>
+
+                <div class="panel glass-panel">
+                    <h3 class="panel-h3">Useful vs noise (words)</h3>
+                    <div class="chart-box chart-box-pie">
+                        <canvas id="chart-pie"></canvas>
+                    </div>
+                </div>
+
+                <div class="panel glass-panel">
+                    <h3 class="panel-h3">Original vs optimized (tokens)</h3>
+                    <div class="chart-box">
+                        <canvas id="chart-bar"></canvas>
+                    </div>
+                </div>
+
+                <div class="panel glass-panel heatmap-panel">
+                    <div class="panel-head">
+                        <h3 class="panel-h3">Token importance</h3>
+                        <div class="legend-dash">
+                            <span class="lg lg-low">Noise</span>
+                            <span class="lg lg-mid">Context</span>
+                            <span class="lg lg-hi">Important</span>
+                            <span class="lg lg-max">Critical</span>
+                        </div>
+                    </div>
+                    <div class="heatmap-box" id="heatmap-output"></div>
+                    <div class="token-tooltip" id="token-tooltip" aria-hidden="true">
+                        <div class="tt-token" id="tooltip-token"></div>
+                        <div class="tt-rows">
+                            <div>TF-IDF <span id="tooltip-tfidf"></span></div>
+                            <div>Freq <span id="tooltip-freq"></span></div>
+                            <div>POS <span id="tooltip-pos"></span></div>
+                            <div>Score <span id="tooltip-score"></span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel glass-panel">
+                    <div class="panel-head">
+                        <h3 class="panel-h3">Optimized prompt</h3>
+                        <button type="button" id="copy-opt-btn" class="btn btn-ghost btn-tiny">Copy</button>
+                    </div>
+                    <pre class="opt-pre" id="optimized-text"></pre>
+                </div>
+            </div>
         </section>
 
-        <!-- ══════════ MAIN CONTENT ══════════ -->
-        <main class="main-content">
-
-            <!-- ── Session toolbar ── -->
-            <section class="session-toolbar glass-panel" aria-label="Conversation session">
-                <div class="session-toolbar-inner">
-                    <span class="session-label">Session</span>
-                    <code class="session-id" id="session-id-display" title="Stored in localStorage">—</code>
-                    <span class="session-meta">Conv. tokens: <strong id="conv-total-tokens">0</strong></span>
-                    <button type="button" id="reset-session-btn" class="btn btn-secondary btn-small">Reset session</button>
-                </div>
-            </section>
-
-            <!-- ── Input Panel ── -->
-            <section class="panel glass-panel input-panel" aria-label="Prompt input">
-                <div class="panel-header">
-                    <h2 class="panel-title">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                        Input Prompt
-                    </h2>
-
-                    <div class="controls-row">
-                        <!-- Model Selector -->
-                        <div class="select-wrapper" title="Select the LLM model for cost calculation">
-                            <svg class="select-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-                            <select id="model-select" aria-label="Select LLM model">
-                                <option value="gpt-4o-mini">GPT-4o Mini</option>
-                                <option value="gpt-4o">GPT-4o</option>
-                                <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-                            </select>
-                            <svg class="select-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
-                        </div>
-
-                        <!-- Token Counter -->
-                        <div class="token-counter" id="live-token-count" title="Live character count (token estimate shown after analysis)">
-                            <span id="char-count">0</span> chars
-                        </div>
-
-                        <!-- Analyze Button -->
-                        <button id="analyze-btn" class="btn btn-primary" aria-live="polite">
-                            <span class="btn-text">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                                Analyze Tokens
-                            </span>
-                            <span class="btn-loading" hidden aria-hidden="true">
-                                <svg class="spin-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-                                Analyzing…
-                            </span>
-                        </button>
-                        <button type="button" id="download-report-btn" class="btn btn-secondary" title="Download PDF (run analysis first)" disabled aria-live="polite">
-                            <span class="btn-text dl-btn-inner">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                                Download Report
-                            </span>
-                            <span class="btn-loading" hidden aria-hidden="true">
-                                <svg class="spin-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-                                Building PDF…
-                            </span>
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Pricing Info Bar -->
-                <div class="pricing-bar" id="pricing-bar" role="status" aria-live="polite">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                    <span id="pricing-info">GPT-4o Mini — Input: $0.15 / 1M tokens · Output: $0.60 / 1M tokens</span>
-                </div>
-
-                <div class="textarea-wrapper">
-                    <textarea
-                        id="prompt-input"
-                        placeholder="Paste or type your prompt here…&#10;&#10;Example: Could you please kindly help me write a very detailed Python script that basically does image classification using a neural network? I was wondering if you could also add some comments."
-                        rows="12"
-                        aria-label="LLM prompt input"
-                        spellcheck="true"
-                    ></textarea>
-                    <div class="textarea-overlay" id="textarea-overlay" aria-hidden="true"></div>
-                </div>
-
-                <!-- Quick examples -->
-                <div class="example-chips" role="group" aria-label="Example prompts">
-                    <span class="chips-label">Try:</span>
-                    <button class="chip" data-example="Could you please kindly help me write a very detailed Python script that basically does image classification using a neural network? I was wondering if you could also just add some comments throughout.">Image Classifier</button>
-                    <button class="chip" data-example="I would like you to please summarize the following article in a very concise manner, if possible keeping it under 100 words, and kindly highlight the main points.">Summarize Article</button>
-                    <button class="chip" data-example="Can you please go ahead and translate the following text from English to French? Feel free to be quite literal with the translation if that would be better.">Translate Text</button>
-                </div>
-            </section>
-
-            <!-- ── Multi-turn conversation ── -->
-            <section class="panel glass-panel conversation-panel" aria-label="Conversation thread">
-                <div class="panel-header">
-                    <h2 class="panel-title">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                        Conversation
-                    </h2>
-                    <span class="panel-subtitle">Each analyze appends your prompt with token counts</span>
-                </div>
-                <div class="chat-thread" id="chat-thread" role="log" aria-live="polite">
-                    <p class="placeholder-text" id="chat-placeholder">Analyze a prompt to build the thread…</p>
-                </div>
-            </section>
-
-            <!-- ── Compare two prompts ── -->
-            <section class="panel glass-panel compare-panel" aria-label="Compare prompts">
-                <div class="panel-header">
-                    <h2 class="panel-title">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-                        Compare prompts (cost)
-                    </h2>
-                    <button type="button" id="compare-btn" class="btn btn-primary btn-small" aria-live="polite">
+        <!-- ========== COMPARE ========== -->
+        <section id="panel-compare" class="tab-panel" role="tabpanel" hidden aria-labelledby="tab-compare">
+            <div class="panel glass-panel">
+                <div class="panel-head">
+                    <h2 class="panel-h2">Compare prompts</h2>
+                    <button type="button" id="compare-btn" class="btn btn-primary">
                         <span class="btn-text">Compare</span>
-                        <span class="btn-loading" hidden aria-hidden="true">
-                            <svg class="spin-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-                            Comparing…
-                        </span>
+                        <span class="btn-loading" hidden><span class="spin"></span></span>
                     </button>
                 </div>
-                <div class="compare-split">
-                    <div class="compare-col" id="compare-col-a">
-                        <label class="compare-label" for="compare-prompt-a">Prompt A</label>
-                        <textarea id="compare-prompt-a" class="compare-textarea" rows="6" placeholder="First prompt…" aria-label="Prompt A"></textarea>
+                <div class="compare-grid">
+                    <div class="compare-cell" id="cmp-a">
+                        <label for="cmp-input-a">Prompt A</label>
+                        <textarea id="cmp-input-a" rows="8"></textarea>
                     </div>
-                    <div class="compare-col" id="compare-col-b">
-                        <label class="compare-label" for="compare-prompt-b">Prompt B</label>
-                        <textarea id="compare-prompt-b" class="compare-textarea" rows="6" placeholder="Second prompt…" aria-label="Prompt B"></textarea>
+                    <div class="compare-cell" id="cmp-b">
+                        <label for="cmp-input-b">Prompt B</label>
+                        <textarea id="cmp-input-b" rows="8"></textarea>
                     </div>
                 </div>
-                <div class="compare-summary glass-panel-inner" id="compare-summary" hidden>
-                    <p class="compare-winner" id="compare-winner"></p>
-                    <div class="compare-metrics" id="compare-metrics"></div>
-                </div>
-            </section>
+                <div id="compare-out" class="compare-out"></div>
+            </div>
+        </section>
 
-            <!-- ── Stats Row ── -->
-            <section class="stats-row" aria-label="Analysis statistics" id="stats-section">
-                <div class="stat-card glass-panel" id="stat-original">
-                    <div class="stat-icon stat-icon-blue">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                    </div>
-                    <div class="stat-info">
-                        <div class="stat-label">Original Cost</div>
-                        <div class="stat-value" id="stat-orig-cost">$–</div>
-                        <div class="stat-sub" id="stat-orig-tokens">– tokens</div>
-                    </div>
+        <!-- ========== CONVERSATION ========== -->
+        <section id="panel-conversation" class="tab-panel" role="tabpanel" hidden aria-labelledby="tab-conversation">
+            <div class="stat-grid glass-panel conv-stats">
+                <div class="stat-tile"><span class="stat-k">Messages</span><span class="stat-v" id="cv-msgs">0</span></div>
+                <div class="stat-tile"><span class="stat-k">User tokens</span><span class="stat-v" id="cv-user">0</span></div>
+                <div class="stat-tile"><span class="stat-k">Assistant tokens</span><span class="stat-v" id="cv-asst">0</span></div>
+                <div class="stat-tile"><span class="stat-k">Total tokens</span><span class="stat-v" id="cv-total">0</span></div>
+                <div class="stat-tile"><span class="stat-k">Est. cost</span><span class="stat-v" id="cv-cost">$0</span></div>
+                <div class="stat-tile"><span class="stat-k">Saved (analyzer)</span><span class="stat-v" id="cv-saved">0</span></div>
+            </div>
+            <div class="panel glass-panel">
+                <div class="panel-head">
+                    <h2 class="panel-h2">Add turn</h2>
+                    <button type="button" id="conv-clear-btn" class="btn btn-ghost">Clear thread</button>
                 </div>
+                <div class="conv-form">
+                    <label class="sr-only" for="conv-role">Role</label>
+                    <select id="conv-role" class="dash-select">
+                        <option value="user">User</option>
+                        <option value="assistant">Assistant</option>
+                    </select>
+                    <textarea id="conv-input" rows="4" placeholder="Message…"></textarea>
+                    <button type="button" id="conv-add-btn" class="btn btn-primary">Add</button>
+                </div>
+                <div class="conv-thread" id="conv-thread"></div>
+            </div>
+        </section>
 
-                <div class="stat-card glass-panel stat-card-accent" id="stat-trimmed">
-                    <div class="stat-icon stat-icon-violet">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                    </div>
-                    <div class="stat-info">
-                        <div class="stat-label">Trimmed Cost</div>
-                        <div class="stat-value" id="stat-trim-cost">$–</div>
-                        <div class="stat-sub" id="stat-trim-tokens">– tokens</div>
-                    </div>
+        <!-- ========== HISTORY ========== -->
+        <section id="panel-history" class="tab-panel" role="tabpanel" hidden aria-labelledby="tab-history">
+            <div class="stat-grid glass-panel" id="hist-summary">
+                <div class="stat-tile"><span class="stat-k">Total original</span><span class="stat-v" id="hs-orig">0</span></div>
+                <div class="stat-tile"><span class="stat-k">Total trimmed</span><span class="stat-v" id="hs-trim">0</span></div>
+                <div class="stat-tile"><span class="stat-k">Total saved</span><span class="stat-v" id="hs-saved">0</span></div>
+                <div class="stat-tile"><span class="stat-k">Avg savings %</span><span class="stat-v" id="hs-avg">0%</span></div>
+            </div>
+            <div class="panel glass-panel">
+                <h3 class="panel-h3">Runs over time</h3>
+                <div class="chart-box chart-tall">
+                    <canvas id="chart-history"></canvas>
                 </div>
+            </div>
+            <div class="panel glass-panel table-panel">
+                <h3 class="panel-h3">Run log</h3>
+                <div class="table-wrap">
+                    <table class="data-table" id="hist-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Preview</th>
+                                <th>Model</th>
+                                <th>Orig</th>
+                                <th>Trim</th>
+                                <th>Saved</th>
+                                <th>%</th>
+                            </tr>
+                        </thead>
+                        <tbody id="hist-tbody"></tbody>
+                    </table>
+                </div>
+                <p class="placeholder-text" id="hist-empty">Run Analyzer to populate history for this session.</p>
+            </div>
+        </section>
 
-                <div class="stat-card glass-panel stat-card-success" id="stat-savings">
-                    <div class="stat-icon stat-icon-green">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
-                    </div>
-                    <div class="stat-info">
-                        <div class="stat-label">Tokens Saved</div>
-                        <div class="stat-value stat-value-green" id="stat-savings-pct">–%</div>
-                        <div class="stat-sub" id="stat-saved-tokens">– tokens saved</div>
-                    </div>
-                </div>
-
-                <div class="stat-card glass-panel" id="stat-model-info">
-                    <div class="stat-icon stat-icon-orange">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-                    </div>
-                    <div class="stat-info">
-                        <div class="stat-label">Model</div>
-                        <div class="stat-value stat-value-model" id="stat-model-name">–</div>
-                        <div class="stat-sub" id="stat-money-saved">$– saved</div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- ── Analytics Chart ── -->
-            <section class="panel glass-panel chart-panel" aria-label="Token analytics chart">
-                <div class="panel-header">
-                    <h2 class="panel-title">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-                        Token Analytics
-                    </h2>
-                    <span class="panel-subtitle">Original vs Trimmed comparison</span>
-                </div>
-                <div class="chart-wrapper">
-                    <canvas id="token-chart" aria-label="Bar chart comparing original and trimmed token counts"></canvas>
-                    <div class="chart-placeholder" id="chart-placeholder">
-                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-                        <p>Run analysis to see token breakdown chart</p>
-                    </div>
-                </div>
-            </section>
-
-            <!-- ── Session token history (per query) ── -->
-            <section class="panel glass-panel chart-panel history-chart-panel" aria-label="Session token history">
-                <div class="panel-header">
-                    <h2 class="panel-title">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                        Session token history
-                    </h2>
-                    <span class="panel-subtitle">Input tokens per analyze in this session</span>
-                </div>
-                <div class="chart-wrapper chart-wrapper-tall">
-                    <canvas id="history-chart" aria-label="Line chart of tokens per query"></canvas>
-                    <div class="chart-placeholder" id="history-chart-placeholder">
-                        <p>Analyze with an active session to chart usage over time</p>
-                    </div>
-                </div>
-            </section>
-
-            <!-- ── Heatmap ── -->
-            <section class="panel glass-panel heatmap-panel" aria-label="Token importance heatmap">
-                <div class="panel-header">
-                    <h2 class="panel-title">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-                        Token Importance Heatmap
-                    </h2>
-                    <div class="heatmap-legend" role="img" aria-label="Heatmap color legend: gray is noise, yellow is context, orange is important, red is critical">
-                        <div class="legend-gradient"></div>
-                        <div class="legend-labels">
-                            <span>Noise</span>
-                            <span>Context</span>
-                            <span>Important</span>
-                            <span>Critical</span>
-                        </div>
-                    </div>
-                </div>
-                <div class="heatmap-container" id="heatmap-output" role="region" aria-live="polite">
-                    <p class="placeholder-text">Run analysis to see the token heatmap…</p>
-                </div>
-
-                <!-- Tooltip (positioned via JS) -->
-                <div class="token-tooltip" id="token-tooltip" role="tooltip" aria-hidden="true">
-                    <div class="tooltip-token" id="tooltip-token"></div>
-                    <div class="tooltip-score">
-                        <div class="tooltip-label">Importance</div>
-                        <div class="tooltip-bar-wrap"><div class="tooltip-bar" id="tooltip-bar"></div></div>
-                        <div class="tooltip-pct" id="tooltip-pct"></div>
-                    </div>
-                    <div class="tooltip-status" id="tooltip-status"></div>
-                </div>
-            </section>
-
-            <!-- ── Trimmed Prompt ── -->
-            <section class="panel glass-panel trimmed-panel" aria-label="Trimmed prompt output">
-                <div class="panel-header">
-                    <h2 class="panel-title">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8.56 2.9A7 7 0 0 1 19 9v4"/><path d="M5 12v-1a7 7 0 0 1 .24-1.83"/><path d="M2 20l2-2 2 2-2 2z"/><path d="M22 20l-2-2-2 2 2 2z"/><path d="M5.5 18.5L2 22"/><path d="M18.5 18.5L22 22"/></svg>
-                        Smart Trimmed Prompt
-                    </h2>
-                    <div class="trim-actions">
-                        <button id="copy-btn" class="btn btn-secondary" aria-label="Copy trimmed prompt to clipboard">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                            Copy
-                        </button>
-                    </div>
-                </div>
-                <div class="trim-comparison" id="trim-comparison" hidden>
-                    <div class="comparison-col">
-                        <div class="comparison-label original-label">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-                            Original
-                        </div>
-                        <div class="comparison-text" id="original-text-display"></div>
-                    </div>
-                    <div class="comparison-divider" aria-hidden="true">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-                    </div>
-                    <div class="comparison-col">
-                        <div class="comparison-label trimmed-label">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
-                            Trimmed
-                        </div>
-                        <div class="comparison-text" id="trimmed-text-display"></div>
-                    </div>
-                </div>
-                <p class="placeholder-text" id="trim-placeholder">Run analysis to see the optimized prompt…</p>
-            </section>
-
-        </main>
-
-        <!-- ══════════ FOOTER ══════════ -->
-        <footer class="site-footer">
-            <p>TokenScope v3.0 &mdash; FastAPI, tiktoken, TF-IDF, Chart.js, ReportLab &middot; Local analysis</p>
+        <footer class="dash-footer">
+            <span>TokenScope</span>
         </footer>
-
     </div>
 
-    <!-- After DOM: script in head would leave all getElementById() as null -->
     <script src="/static/script.js"></script>
 </body>
 </html>

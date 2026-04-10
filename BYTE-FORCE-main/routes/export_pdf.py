@@ -18,6 +18,11 @@ class ExportRequest(BaseModel):
     token_data: list = []
     tfidf_top_terms: list | None = None
     conversation_messages: list | None = None
+    pos_tags: dict | None = None
+    noise_level: str | None = None
+    noise_words: list | None = None
+    efficiency_score: int | None = None
+    repetition: dict | None = None
 
 
 def export_pdf(req: ExportRequest):

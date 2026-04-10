@@ -4,11 +4,14 @@ from services import session_store
 
 
 def get_history(session_id: str):
-    snap = session_store.session_snapshot(session_id)
-    if not snap:
+    dash = session_store.history_dashboard(session_id)
+    if dash is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    runs = dash["runs"]
     return {
-        "session_id": session_id,
-        "query_history": snap["query_history"],
-        "total_queries": len(snap["query_history"]),
+        "session_id": dash["session_id"],
+        "totals": dash["totals"],
+        "runs": runs,
+        "query_history": runs,
+        "total_queries": len(runs),
     }

@@ -116,7 +116,47 @@ def build_analysis_pdf(payload: dict[str, Any]) -> bytes:
         )
     )
     story.append(t)
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 8))
+
+    pos = payload.get("pos_tags") or {}
+    if pos and any(pos.values()):
+        story.append(Paragraph("POS breakdown (spaCy)", h2))
+        pr = [["POS group", "Count"]]
+        for k in ("noun", "verb", "adj", "adv", "other"):
+            pr.append([k.capitalize(), str(pos.get(k, 0))])
+        pt = Table(pr, colWidths=[2 * inch, 1.5 * inch])
+        pt.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e0f2fe")),
+                    ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#bae6fd")),
+                    ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ]
+            )
+        )
+        story.append(pt)
+        story.append(Spacer(1, 8))
+
+    nl = payload.get("noise_level")
+    nw = payload.get("noise_words") or []
+    es = payload.get("efficiency_score")
+    if nl or nw or es is not None:
+        story.append(Paragraph("Noise &amp; efficiency", h2))
+        bits = []
+        if nl:
+            bits.append(f"Noise level: {nl}")
+        if es is not None:
+            bits.append(f"Efficiency score: {es}/100")
+        if nw:
+            bits.append("Filler tokens: " + ", ".join(nw[:40]))
+        story.append(Paragraph(_escape_xml(" · ".join(bits)), body))
+        story.append(Spacer(1, 8))
+
+    rep = payload.get("repetition") or {}
+    if rep:
+        story.append(Paragraph("Top repeated words", h2))
+        story.append(Paragraph(_escape_xml(", ".join(f"{k}×{v}" for k, v in list(rep.items())[:20])), mono))
+        story.append(Spacer(1, 8))
 
     story.append(Paragraph("Top TF-IDF terms (word-level)", h2))
     if tfidf:
@@ -139,11 +179,15 @@ def build_analysis_pdf(payload: dict[str, Any]) -> bytes:
     if token_data:
         story.append(Paragraph("Token-level scores (first 40 segments)", h2))
         sample = token_data[:40]
-        td_rows = [["Text", "Score"]] + [
-            [str(x.get("text", "")).replace("\n", " ")[:48], f'{float(x.get("score", 0)):.4f}']
+        td_rows = [["Text", "TF-IDF", "Score"]] + [
+            [
+                str(x.get("text", "")).replace("\n", " ")[:40],
+                f'{float(x.get("tfidf", 0)):.4f}',
+                f'{float(x.get("score", 0)):.4f}',
+            ]
             for x in sample
         ]
-        td_table = Table(td_rows, colWidths=[3.8 * inch, 0.9 * inch])
+        td_table = Table(td_rows, colWidths=[3.2 * inch, 0.85 * inch, 0.65 * inch])
         td_table.setStyle(
             TableStyle(
                 [

@@ -3,3 +3,4 @@ uvicorn
 tiktoken
 scikit-learn
 reportlab
+spacy>=3.7.0

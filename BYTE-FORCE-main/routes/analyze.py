@@ -9,7 +9,7 @@ class AnalyzeRequest(BaseModel):
     prompt: str
     model: str = "gpt-4o-mini"
     session_id: str | None = None
-    append_to_session: bool = True
+    append_to_session: bool = False
 
 
 def analyze_prompt(req: AnalyzeRequest):
@@ -28,9 +28,14 @@ def analyze_prompt(req: AnalyzeRequest):
                     req.prompt,
                     result["original_tokens"],
                 )
-            snap = session_store.record_analyze_query(
+            snap = session_store.record_analyze_run(
                 req.session_id,
-                result["original_tokens"],
+                original_tokens=result["original_tokens"],
+                trimmed_tokens=result["trimmed_tokens"],
+                saved_tokens=result["saved_tokens"],
+                savings_pct=result["savings_percentage"],
+                prompt_preview=req.prompt[:200],
+                model=req.model,
             )
             result = {**result, "session": snap}
         return result

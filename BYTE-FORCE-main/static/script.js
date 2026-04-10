@@ -1,768 +1,314 @@
-/**
- * TokenScope v2.0 — Frontend Application
- * ─────────────────────────────────────────
- * Responsibilities:
- *   - Fetch /api/models on load to build pricing bar
- *   - POST /api/analyze with prompt + model
- *   - Render token heatmap with smooth gradient colors
- *   - Render Chart.js bar chart (original vs trimmed)
- *   - Display side-by-side trimmed comparison
- *   - Animated stats counters + tooltips
- *   - Example chip injection + live char count
- */
-
 'use strict';
 
-/* ════════════════════════════════════════════
-   DOM REFERENCES
-   ════════════════════════════════════════════ */
+const STORAGE_KEY = 'tokenscope_session_id';
+let sessionId = null;
+let lastAnalysis = null;
+let modelPricing = {};
+
+let chartPos = null;
+let chartPie = null;
+let chartBar = null;
+let chartHist = null;
+
 const $ = (id) => document.getElementById(id);
 
-const DOM = {
-  analyzeBtn:        $('analyze-btn'),
-  copyBtn:           $('copy-btn'),
-  promptInput:       $('prompt-input'),
-  modelSelect:       $('model-select'),
-  charCount:         $('char-count'),
-  pricingInfo:       $('pricing-info'),
-
-  // Stats
-  statOrigCost:      $('stat-orig-cost'),
-  statOrigTokens:    $('stat-orig-tokens'),
-  statTrimCost:      $('stat-trim-cost'),
-  statTrimTokens:    $('stat-trim-tokens'),
-  statSavingsPct:    $('stat-savings-pct'),
-  statSavedTokens:   $('stat-saved-tokens'),
-  statModelName:     $('stat-model-name'),
-  statMoneySaved:    $('stat-money-saved'),
-
-  // Chart
-  tokenChart:        $('token-chart'),
-  chartPlaceholder:  $('chart-placeholder'),
-
-  // Heatmap
-  heatmapOutput:     $('heatmap-output'),
-  tokenTooltip:      $('token-tooltip'),
-  tooltipToken:      $('tooltip-token'),
-  tooltipBar:        $('tooltip-bar'),
-  tooltipPct:        $('tooltip-pct'),
-  tooltipStatus:     $('tooltip-status'),
-
-  // Trimmed
-  trimComparison:    $('trim-comparison'),
-  trimPlaceholder:   $('trim-placeholder'),
-  originalTextDisplay: $('original-text-display'),
-  trimmedTextDisplay:  $('trimmed-text-display'),
-
-  // Session & conversation
-  sessionIdDisplay:  $('session-id-display'),
-  convTotalTokens:   $('conv-total-tokens'),
-  resetSessionBtn:   $('reset-session-btn'),
-  chatThread:        $('chat-thread'),
-  chatPlaceholder:   $('chat-placeholder'),
-
-  // Compare
-  compareBtn:        $('compare-btn'),
-  comparePromptA:   $('compare-prompt-a'),
-  comparePromptB:   $('compare-prompt-b'),
-  compareSummary:    $('compare-summary'),
-  compareWinner:     $('compare-winner'),
-  compareMetrics:    $('compare-metrics'),
-  compareColA:       $('compare-col-a'),
-  compareColB:       $('compare-col-b'),
-
-  // History chart & export
-  historyChart:      $('history-chart'),
-  historyPlaceholder: $('history-chart-placeholder'),
-  downloadReportBtn: $('download-report-btn'),
-};
-
-/* ════════════════════════════════════════════
-   STATE
-   ════════════════════════════════════════════ */
-const STORAGE_KEY = 'tokenscope_session_id';
-
-let modelPricing       = {};
-let chartInstance      = null;
-let historyChartInstance = null;
-/** @type {string|null} */
-let sessionId          = null;
-/** @type {object|null} */
-let lastAnalysis       = null;
-
-/* ════════════════════════════════════════════
-   UTILITY HELPERS
-   ════════════════════════════════════════════ */
-
-/**
- * Smoothly animate a numeric value change in a DOM element.
- */
-function animateValue(el, from, to, duration, formatter) {
-  const start = performance.now();
-  const diff  = to - from;
-
-  function update(now) {
-    const elapsed  = now - start;
-    const progress = Math.min(elapsed / duration, 1);
-    // Ease-out cubic
-    const eased    = 1 - Math.pow(1 - progress, 3);
-    el.textContent = formatter(from + diff * eased);
-    if (progress < 1) requestAnimationFrame(update);
+function showToast(msg) {
+  let el = document.querySelector('.error-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'error-toast';
+    document.body.appendChild(el);
   }
-
-  requestAnimationFrame(update);
+  el.textContent = msg;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.textContent = ''; }, 5000);
 }
 
-/**
- * Map a 0-1 score to a smooth gradient color (gray → yellow → orange → red).
- * Returns an rgba() string.
- */
-function scoreToColor(score) {
-  // Define gradient stops: [score, [r, g, b, a]]
-  const stops = [
-    [0.00, [55,  65,  81,  0.50]],  // dark gray — noise
-    [0.15, [55,  65,  81,  0.60]],  // still gray
-    [0.30, [234, 179, 8,   0.55]],  // yellow
-    [0.60, [249, 115, 22,  0.72]],  // orange
-    [1.00, [239, 68,  68,  0.88]],  // red
-  ];
-
-  // Clamp
-  const s = Math.max(0, Math.min(1, score));
-
-  // Find surrounding stops
-  for (let i = 1; i < stops.length; i++) {
-    const [s0, c0] = stops[i - 1];
-    const [s1, c1] = stops[i];
-
-    if (s <= s1) {
-      const t = (s - s0) / (s1 - s0);
-      const r = Math.round(c0[0] + (c1[0] - c0[0]) * t);
-      const g = Math.round(c0[1] + (c1[1] - c0[1]) * t);
-      const b = Math.round(c0[2] + (c1[2] - c0[2]) * t);
-      const a = +(c0[3] + (c1[3] - c0[3]) * t).toFixed(3);
-      return `rgba(${r}, ${g}, ${b}, ${a})`;
-    }
-  }
-
-  // Fallback
-  return `rgba(239, 68, 68, 0.88)`;
-}
-
-/**
- * Return status label & CSS class for a token score.
- */
-function scoreStatus(score) {
-  if (score < 0.15) return { label: 'Noise',     cls: 'status-noise'     };
-  if (score < 0.40) return { label: 'Context',   cls: 'status-context'   };
-  if (score < 0.70) return { label: 'Important', cls: 'status-important' };
-  return               { label: 'Critical',  cls: 'status-critical'  };
-}
-
-/**
- * Format USD values dynamically based on magnitude.
- */
-function formatUSD(val) {
-  if (val === 0) return '$0.000000';
-  if (val < 0.0001) return `$${val.toExponential(3)}`;
-  return `$${val.toFixed(6)}`;
-}
-
-/**
- * Pulse animation on stat elements to indicate update.
- */
-function pulse(el) {
-  el.classList.remove('pulse');
-  void el.offsetWidth; // reflow
-  el.classList.add('pulse');
-}
-
-/* ════════════════════════════════════════════
-   PRICING BAR
-   ════════════════════════════════════════════ */
-function updatePricingBar(model) {
-  const pricing = modelPricing[model];
-  if (!pricing) return;
-
-  const modelLabels = {
-    'gpt-4o-mini':   'GPT-4o Mini',
-    'gpt-4o':        'GPT-4o',
-    'gpt-3.5-turbo': 'GPT-3.5 Turbo',
-  };
-
-  DOM.pricingInfo.textContent =
-    `${modelLabels[model] || model} — ` +
-    `Input: $${pricing.input.toFixed(2)} / 1M tokens · ` +
-    `Output: $${pricing.output.toFixed(2)} / 1M tokens`;
-}
-
-async function fetchModels() {
-  try {
-    const res  = await fetch('/api/models');
-    const data = await res.json();
-    modelPricing = data.models || {};
-    updatePricingBar(DOM.modelSelect.value);
-  } catch (e) {
-    console.warn('Could not fetch model pricing:', e);
-  }
-}
-
-/* ════════════════════════════════════════════
-   CHART (Chart.js)
-   ════════════════════════════════════════════ */
-function renderChart(originalTokens, trimmedTokens) {
-  DOM.chartPlaceholder.classList.add('hidden');
-
-  if (chartInstance) {
-    chartInstance.destroy();
-    chartInstance = null;
-  }
-
-  const ctx = DOM.tokenChart.getContext('2d');
-
-  // Gradient fills
-  const gradOrig = ctx.createLinearGradient(0, 0, 0, 260);
-  gradOrig.addColorStop(0,   'rgba(99,  102, 241, 0.9)');
-  gradOrig.addColorStop(1,   'rgba(99,  102, 241, 0.2)');
-
-  const gradTrim = ctx.createLinearGradient(0, 0, 0, 260);
-  gradTrim.addColorStop(0,   'rgba(16,  185, 129, 0.9)');
-  gradTrim.addColorStop(1,   'rgba(16,  185, 129, 0.2)');
-
-  chartInstance = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: ['Original Prompt', 'Trimmed Prompt'],
-      datasets: [{
-        label: 'Token Count',
-        data:  [originalTokens, trimmedTokens],
-        backgroundColor: [gradOrig, gradTrim],
-        borderColor:     ['rgba(99,102,241,1)', 'rgba(16,185,129,1)'],
-        borderWidth:     2,
-        borderRadius:    10,
-        borderSkipped:   false,
-        barThickness:    64,
-      }]
-    },
-    options: {
-      responsive:          true,
-      maintainAspectRatio: false,
-      animation: {
-        duration: 800,
-        easing:   'easeOutQuart',
-      },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: '#1a1d2e',
-          borderColor:     'rgba(255,255,255,0.12)',
-          borderWidth:     1,
-          titleColor:      '#e2e8f0',
-          bodyColor:       '#94a3b8',
-          padding:         12,
-          cornerRadius:    10,
-          callbacks: {
-            title: (items) => items[0].label,
-            label: (item)  => ` ${item.raw.toLocaleString()} tokens`,
-          }
-        }
-      },
-      scales: {
-        x: {
-          grid: { color: 'rgba(255,255,255,0.04)', drawBorder: false },
-          ticks: { color: '#64748b', font: { family: "'Inter', sans-serif", size: 12 } },
-          border: { color: 'rgba(255,255,255,0.06)' },
-        },
-        y: {
-          beginAtZero: true,
-          grid: { color: 'rgba(255,255,255,0.04)', drawBorder: false },
-          ticks: {
-            color:    '#64748b',
-            font:     { family: "'Inter', sans-serif", size: 11 },
-            callback: (v) => v.toLocaleString(),
-          },
-          border: { color: 'rgba(255,255,255,0.06)' },
-        }
-      }
-    }
-  });
-}
-
-/* ════════════════════════════════════════════
-   SESSION & CONVERSATION
-   ════════════════════════════════════════════ */
-
-function shortId(sid) {
-  if (!sid || sid.length < 10) return sid || '—';
-  return `${sid.slice(0, 8)}…`;
-}
-
-function renderChatThread(messages) {
-  const holder = DOM.chatThread;
-  holder.innerHTML = '';
-  if (!messages || messages.length === 0) {
-    const p = document.createElement('p');
-    p.className = 'placeholder-text';
-    p.id = 'chat-placeholder';
-    p.textContent = 'Analyze a prompt to build the thread…';
-    holder.appendChild(p);
-    return;
-  }
-  messages.forEach((m) => {
-    const wrap = document.createElement('div');
-    wrap.className = 'chat-bubble chat-bubble-user';
-    const body = document.createElement('div');
-    body.className = 'chat-bubble-body';
-    body.textContent = m.content || '';
-    const meta = document.createElement('div');
-    meta.className = 'chat-bubble-meta';
-    meta.innerHTML = `<span>${(m.role || 'user').toUpperCase()}</span><span>${Number(m.tokens || 0).toLocaleString()} tok</span>`;
-    wrap.appendChild(body);
-    wrap.appendChild(meta);
-    holder.appendChild(wrap);
-  });
-  holder.scrollTop = holder.scrollHeight;
-}
-
-function renderHistoryChart(queryHistory) {
-  const hist = queryHistory && queryHistory.length ? queryHistory : [];
-  if (!hist.length) {
-    if (historyChartInstance) {
-      historyChartInstance.destroy();
-      historyChartInstance = null;
-    }
-    DOM.historyPlaceholder.classList.remove('hidden');
-    return;
-  }
-
-  DOM.historyPlaceholder.classList.add('hidden');
-
-  if (historyChartInstance) {
-    historyChartInstance.destroy();
-    historyChartInstance = null;
-  }
-
-  const ctx = DOM.historyChart.getContext('2d');
-  const labels = hist.map((q) => `Q${q.query_id}`);
-  const values = hist.map((q) => q.tokens_used);
-
-  const grad = ctx.createLinearGradient(0, 0, 0, 280);
-  grad.addColorStop(0, 'rgba(139, 92, 246, 0.85)');
-  grad.addColorStop(1, 'rgba(99, 102, 241, 0.15)');
-
-  historyChartInstance = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [{
-        label: 'Tokens (analyze)',
-        data: values,
-        fill: true,
-        backgroundColor: grad,
-        borderColor: 'rgba(167, 139, 250, 1)',
-        tension: 0.25,
-        pointRadius: 4,
-        pointBackgroundColor: '#fff',
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: { duration: 650, easing: 'easeOutQuart' },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: '#1a1d2e',
-          borderColor: 'rgba(255,255,255,0.12)',
-          borderWidth: 1,
-          callbacks: {
-            footer: (items) => {
-              const i = items[0].dataIndex;
-              const t = hist[i] && hist[i].timestamp ? hist[i].timestamp : '';
-              return t || '';
-            },
-            label: (item) => ` ${Number(item.raw).toLocaleString()} tokens`,
-          },
-        },
-      },
-      scales: {
-        x: {
-          grid: { color: 'rgba(255,255,255,0.04)', drawBorder: false },
-          ticks: { color: '#64748b', font: { family: "'Inter', sans-serif", size: 11 } },
-          border: { color: 'rgba(255,255,255,0.06)' },
-        },
-        y: {
-          beginAtZero: true,
-          grid: { color: 'rgba(255,255,255,0.04)', drawBorder: false },
-          ticks: {
-            color: '#64748b',
-            font: { family: "'Inter', sans-serif", size: 11 },
-            callback: (v) => v.toLocaleString(),
-          },
-          border: { color: 'rgba(255,255,255,0.06)' },
-        },
-      },
-    },
-  });
-}
-
-function applySessionSnapshot(snap) {
-  if (!snap) return;
-  DOM.sessionIdDisplay.textContent = shortId(snap.session_id);
-  DOM.convTotalTokens.textContent = Number(snap.total_tokens || 0).toLocaleString();
-  renderChatThread(snap.messages || []);
-  renderHistoryChart(snap.query_history || []);
+function formatUSD(v) {
+  if (v === 0) return '$0.000000';
+  if (Math.abs(v) < 0.0001) return `$${v.toExponential(2)}`;
+  return `$${v.toFixed(6)}`;
 }
 
 async function ensureSession() {
   let sid = localStorage.getItem(STORAGE_KEY);
   if (sid) {
-    try {
-      const r = await fetch(`/api/session/${encodeURIComponent(sid)}`);
-      if (r.ok) {
-        const snap = await r.json();
-        sessionId = snap.session_id;
-        applySessionSnapshot(snap);
-        return sessionId;
-      }
-    } catch (e) {
-      console.warn('[TokenScope] session fetch failed', e);
+    const r = await fetch(`/api/session/${encodeURIComponent(sid)}`);
+    if (r.ok) {
+      sessionId = sid;
+      return sid;
     }
   }
   const cr = await fetch('/api/session', { method: 'POST' });
   if (!cr.ok) {
     sessionId = null;
     localStorage.removeItem(STORAGE_KEY);
-    if (DOM.sessionIdDisplay) DOM.sessionIdDisplay.textContent = '—';
-    console.warn('[TokenScope] Session API unavailable — analyze still works without chat/history.');
     return null;
   }
-  const data = await cr.json();
-  sessionId = data.session_id;
+  const d = await cr.json();
+  sessionId = d.session_id;
   localStorage.setItem(STORAGE_KEY, sessionId);
-  applySessionSnapshot({
-    session_id: sessionId,
-    messages: [],
-    total_tokens: 0,
-    query_history: [],
-  });
   return sessionId;
 }
 
-async function handleResetSession() {
-  DOM.resetSessionBtn.disabled = true;
-  try {
-    const res = await fetch('/api/session/reset', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId }),
-    });
-    if (!res.ok) throw new Error('Reset failed');
-    const data = await res.json();
-    sessionId = data.session_id;
-    localStorage.setItem(STORAGE_KEY, sessionId);
-    lastAnalysis = null;
-    DOM.downloadReportBtn.disabled = true;
-    applySessionSnapshot({
-      session_id: sessionId,
-      messages: [],
-      total_tokens: 0,
-      query_history: [],
-    });
-  } catch (e) {
-    showErrorBanner(e.message || 'Reset failed');
-  } finally {
-    DOM.resetSessionBtn.disabled = false;
-  }
-}
-
-/* ════════════════════════════════════════════
-   HEATMAP RENDERER
-   ════════════════════════════════════════════ */
-function renderHeatmap(tokenData) {
-  const container = DOM.heatmapOutput;
-  container.innerHTML = '';
-
-  const fragment = document.createDocumentFragment();
-
-  tokenData.forEach((token, idx) => {
-    const span = document.createElement('span');
-    span.className   = 'token-span';
-    span.textContent = token.text;
-
-    const bgColor = scoreToColor(token.score);
-    span.style.backgroundColor = bgColor;
-
-    // Text color: stay white for high-intensity backgrounds, dim for low
-    if (token.score < 0.15) {
-      span.style.color = '#4b5563';
-    } else {
-      span.style.color = '#ffffff';
-    }
-
-    // Tooltip on mouse-enter
-    span.addEventListener('mouseenter', (e) => showTokenTooltip(e, token));
-    span.addEventListener('mousemove',  (e) => repositionTooltip(e));
-    span.addEventListener('mouseleave',      () => hideTokenTooltip());
-
-    fragment.appendChild(span);
+function setTab(name) {
+  document.querySelectorAll('.dash-tab').forEach((b) => {
+    const on = b.dataset.tab === name;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
   });
-
-  container.appendChild(fragment);
+  document.querySelectorAll('.tab-panel').forEach((p) => {
+    const on = p.id === `panel-${name}`;
+    p.classList.toggle('is-active', on);
+    p.hidden = !on;
+  });
+  if (name === 'conversation') refreshConversation();
+  if (name === 'history') refreshHistory();
 }
 
-/* ════════════════════════════════════════════
-   TOKEN TOOLTIP
-   ════════════════════════════════════════════ */
-function showTokenTooltip(e, token) {
-  const tooltip = DOM.tokenTooltip;
-
-  // Token text
-  DOM.tooltipToken.textContent = `"${token.text.replace(/\n/g, '↵')}"`;
-
-  // Score bar
-  const pct = Math.round(token.score * 100);
-  DOM.tooltipBar.style.width = `${pct}%`;
-  DOM.tooltipPct.textContent = `${pct}%`;
-
-  // Status label
-  const status = scoreStatus(token.score);
-  DOM.tooltipStatus.textContent  = status.label;
-  DOM.tooltipStatus.className    = `tooltip-status ${status.cls}`;
-
-  repositionTooltip(e);
-
-  tooltip.removeAttribute('aria-hidden');
-  tooltip.classList.add('visible');
+function scoreToHeatColor(score) {
+  if (score < 0.12) return 'rgba(71, 85, 105, 0.55)';
+  if (score < 0.35) return 'rgba(100, 116, 139, 0.65)';
+  if (score < 0.55) return 'rgba(34, 211, 238, 0.45)';
+  if (score < 0.78) return 'rgba(251, 146, 60, 0.65)';
+  return 'rgba(248, 113, 113, 0.75)';
 }
 
-function repositionTooltip(e) {
-  const tooltip = DOM.tokenTooltip;
-  const pad     = 14;
-  const tw      = tooltip.offsetWidth  || 200;
-  const th      = tooltip.offsetHeight || 120;
-  const vw      = window.innerWidth;
-  const vh      = window.innerHeight;
+function renderHeatmap(tokenData) {
+  const el = $('heatmap-output');
+  el.innerHTML = '';
+  const frag = document.createDocumentFragment();
+  tokenData.forEach((tok) => {
+    const s = document.createElement('span');
+    s.className = 'token-span';
+    s.textContent = tok.text;
+    s.style.backgroundColor = scoreToHeatColor(tok.score);
+    s.style.color = tok.score < 0.35 ? '#cbd5e1' : '#fff';
+    s.addEventListener('mouseenter', (e) => showTip(e, tok));
+    s.addEventListener('mousemove', moveTip);
+    s.addEventListener('mouseleave', hideTip);
+    frag.appendChild(s);
+  });
+  el.appendChild(frag);
+}
 
+const tip = $('token-tooltip');
+function showTip(e, tok) {
+  $('tooltip-token').textContent = `"${String(tok.text).replace(/\n/g, '↵')}"`;
+  $('tooltip-tfidf').textContent = tok.tfidf != null ? String(tok.tfidf) : '—';
+  $('tooltip-freq').textContent = tok.freq != null ? String(tok.freq) : '—';
+  $('tooltip-pos').textContent = tok.pos || '—';
+  $('tooltip-score').textContent = `${Math.round(tok.score * 100)}%`;
+  tip.classList.add('visible');
+  moveTip(e);
+}
+
+function moveTip(e) {
+  const pad = 12;
   let x = e.clientX + pad;
   let y = e.clientY + pad;
-
-  if (x + tw > vw - 8) x = e.clientX - tw - pad;
-  if (y + th > vh - 8) y = e.clientY - th - pad;
-
-  tooltip.style.left = `${x}px`;
-  tooltip.style.top  = `${y}px`;
+  const tw = tip.offsetWidth || 240;
+  const th = tip.offsetHeight || 120;
+  if (x + tw > innerWidth - 8) x = e.clientX - tw - pad;
+  if (y + th > innerHeight - 8) y = e.clientY - th - pad;
+  tip.style.left = `${x}px`;
+  tip.style.top = `${y}px`;
 }
 
-function hideTokenTooltip() {
-  DOM.tokenTooltip.classList.remove('visible');
-  DOM.tokenTooltip.setAttribute('aria-hidden', 'true');
+function hideTip() {
+  tip.classList.remove('visible');
 }
 
-/* ════════════════════════════════════════════
-   STATS UPDATER
-   ════════════════════════════════════════════ */
-function updateStats(data) {
-  const modelLabels = {
-    'gpt-4o-mini':   'GPT-4o Mini',
-    'gpt-4o':        'GPT-4o',
-    'gpt-3.5-turbo': 'GPT-3.5 Turbo',
-  };
-
-  // Cost: animate from 0
-  const animDuration = 600;
-
-  animateValue(DOM.statOrigCost, 0, data.cost_original_usd, animDuration, (v) => formatUSD(v));
-  animateValue(DOM.statTrimCost, 0, data.cost_trimmed_usd,  animDuration, (v) => formatUSD(v));
-  animateValue(DOM.statSavingsPct, 0, data.savings_percentage, animDuration, (v) => `${v.toFixed(1)}%`);
-
-  DOM.statOrigTokens.textContent  = `${data.original_tokens.toLocaleString()} tokens`;
-  DOM.statTrimTokens.textContent  = `${data.trimmed_tokens.toLocaleString()} tokens`;
-  DOM.statSavedTokens.textContent = `${data.saved_tokens.toLocaleString()} tokens saved`;
-  DOM.statModelName.textContent   = modelLabels[data.model] || data.model;
-
-  const moneySaved = data.cost_original_usd - data.cost_trimmed_usd;
-  DOM.statMoneySaved.textContent = `${formatUSD(moneySaved)} saved`;
-
-  // Pulse all stat values
-  [DOM.statOrigCost, DOM.statTrimCost, DOM.statSavingsPct, DOM.statModelName].forEach(pulse);
-}
-
-/* ════════════════════════════════════════════
-   TRIMMED PROMPT DISPLAY
-   ════════════════════════════════════════════ */
-function renderTrimmedComparison(originalText, trimmedText) {
-  DOM.originalTextDisplay.textContent = originalText;
-  DOM.trimmedTextDisplay.textContent  = trimmedText;
-
-  DOM.trimPlaceholder.hidden     = true;
-  DOM.trimComparison.hidden      = false;
-  DOM.trimComparison.classList.add('animate-fade-up');
-}
-
-/* ════════════════════════════════════════════
-   LOADING STATE
-   ════════════════════════════════════════════ */
-function setLoading(loading) {
-  const btn = DOM.analyzeBtn;
-  if (loading) {
-    btn.classList.add('loading');
-    btn.disabled = true;
-  } else {
-    btn.classList.remove('loading');
-    btn.disabled = false;
+function destroyChart(c) {
+  if (c) {
+    c.destroy();
+    return null;
   }
+  return null;
 }
 
-/* ════════════════════════════════════════════
-   MAIN ANALYZE HANDLER
-   ════════════════════════════════════════════ */
-async function postAnalyze(payload) {
-  const response = await fetch('/api/analyze', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify(payload),
+function renderPosChart(pos) {
+  const ctx = $('chart-pos').getContext('2d');
+  chartPos = destroyChart(chartPos);
+  const labels = ['Nouns', 'Verbs', 'Adj', 'Adv', 'Other'];
+  const data = [pos.noun || 0, pos.verb || 0, pos.adj || 0, pos.adv || 0, pos.other || 0];
+  chartPos = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Count',
+        data,
+        backgroundColor: [
+          'rgba(99, 102, 241, 0.75)',
+          'rgba(34, 211, 238, 0.65)',
+          'rgba(251, 146, 60, 0.7)',
+          'rgba(167, 139, 250, 0.65)',
+          'rgba(100, 116, 139, 0.5)',
+        ],
+        borderRadius: 8,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#8b93a7' }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        y: { beginAtZero: true, ticks: { color: '#8b93a7' }, grid: { color: 'rgba(255,255,255,0.04)' } },
+      },
+    },
   });
-  if (response.status === 404) {
-    await ensureSession();
-    const retry = { prompt: payload.prompt, model: payload.model };
-    if (sessionId) {
-      retry.session_id = sessionId;
-      retry.append_to_session = true;
-    }
-    return fetch('/api/analyze', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(retry),
+}
+
+function renderPieChart(useful, noise) {
+  const ctx = $('chart-pie').getContext('2d');
+  chartPie = destroyChart(chartPie);
+  chartPie = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: ['Useful words', 'Noise words'],
+      datasets: [{
+        data: [Math.max(1, useful), Math.max(0, noise)],
+        backgroundColor: ['rgba(52, 211, 153, 0.7)', 'rgba(248, 113, 113, 0.55)'],
+        borderWidth: 0,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'bottom', labels: { color: '#8b93a7' } },
+      },
+    },
+  });
+}
+
+function renderBarCompare(orig, trim) {
+  const ctx = $('chart-bar').getContext('2d');
+  chartBar = destroyChart(chartBar);
+  chartBar = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ['Original', 'Optimized'],
+      datasets: [{
+        data: [orig, trim],
+        backgroundColor: ['rgba(99, 102, 241, 0.65)', 'rgba(52, 211, 153, 0.65)'],
+        borderRadius: 10,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { beginAtZero: true, ticks: { color: '#8b93a7' }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        x: { ticks: { color: '#8b93a7' }, grid: { display: false } },
+      },
+    },
+  });
+}
+
+function fillPills(container, items, mapFn) {
+  const el = $(container);
+  el.innerHTML = '';
+  if (!items || (Array.isArray(items) && !items.length)) {
+    el.innerHTML = '<span class="pill">—</span>';
+    return;
+  }
+  if (Array.isArray(items)) {
+    items.forEach((item) => {
+      const span = document.createElement('span');
+      span.className = 'pill';
+      span.textContent = mapFn ? mapFn(item) : String(item);
+      el.appendChild(span);
+    });
+  } else {
+    Object.entries(items).forEach((item) => {
+      const span = document.createElement('span');
+      span.className = 'pill';
+      span.textContent = mapFn ? mapFn(item) : String(item);
+      el.appendChild(span);
     });
   }
-  return response;
+}
+
+function renderAnalyzer(data) {
+  $('analyzer-results').classList.add('visible');
+  $('st-total').textContent = data.total_tokens.toLocaleString();
+  $('st-unique').textContent = (data.unique_tokens ?? data.original_tokens).toLocaleString();
+  $('st-words').textContent = (data.unique_words ?? '—').toLocaleString();
+  $('st-rep').textContent = `${((data.repetition_rate || 0) * 100).toFixed(1)}%`;
+  $('st-sw').textContent = `${data.stopword_pct ?? 0}%`;
+  $('st-eff').textContent = data.efficiency_score ?? '—';
+
+  $('cost-before').textContent = formatUSD(data.cost_before ?? data.cost_original_usd);
+  $('cost-after').textContent = formatUSD(data.cost_after ?? data.cost_trimmed_usd);
+  $('cost-saved').textContent = `${(data.tokens_saved ?? data.saved_tokens).toLocaleString()} tok`;
+  $('cost-pct').textContent = `${(data.savings_percentage ?? 0).toFixed(1)}%`;
+
+  $('noise-level').textContent = `Noise level: ${data.noise_level || '—'}`;
+  fillPills('noise-list', data.noise_suggested_removals || data.noise_words || []);
+  const rep = data.repetition || {};
+  fillPills('rep-list', Object.entries(rep).slice(0, 12), ([w, c]) => `${w} ×${c}`);
+
+  const pos = data.pos_tags || {};
+  const posSum = (pos.noun || 0) + (pos.verb || 0) + (pos.adj || 0) + (pos.adv || 0);
+  $('pos-badge').textContent = posSum > 0 ? 'spaCy' : 'install en_core_web_sm';
+
+  renderPosChart(pos);
+  renderPieChart(data.useful_token_words ?? 1, data.noise_token_words ?? 0);
+  renderBarCompare(data.original_tokens, data.trimmed_tokens);
+  renderHeatmap(data.token_data || []);
+  $('optimized-text').textContent = data.optimized_prompt || data.trimmed_prompt || '';
+
+  $('download-pdf-btn').disabled = false;
+  $('download-json-btn').disabled = false;
 }
 
 async function handleAnalyze() {
-  const prompt = DOM.promptInput.value.trim();
+  const prompt = $('prompt-input').value.trim();
   if (!prompt) {
-    DOM.promptInput.focus();
-    DOM.promptInput.style.borderColor = 'rgba(239,68,68,0.7)';
-    setTimeout(() => { DOM.promptInput.style.borderColor = ''; }, 1200);
+    showToast('Enter a prompt to analyze.');
     return;
   }
-
-  const model = DOM.modelSelect.value;
-
-  setLoading(true);
-
+  const model = $('global-model').value;
+  const btn = $('analyze-btn');
+  btn.classList.add('loading');
+  btn.disabled = true;
   try {
-    if (!sessionId) await ensureSession();
-
-    const payload = { prompt, model };
-    if (sessionId) {
-      payload.session_id = sessionId;
-      payload.append_to_session = true;
-    }
-
-    let response = await postAnalyze(payload);
-
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(
-        typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail) || `HTTP ${response.status}`,
-      );
-    }
-
-    const data = await response.json();
-
-    lastAnalysis = data;
-    DOM.downloadReportBtn.disabled = false;
-
-    if (data.session) applySessionSnapshot(data.session);
-
-    updateStats(data);
-    renderChart(data.original_tokens, data.trimmed_tokens);
-    renderHeatmap(data.token_data);
-    renderTrimmedComparison(prompt, data.trimmed_prompt);
-
-    DOM.heatmapOutput.closest('.panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  } catch (err) {
-    console.error('[TokenScope] Analysis error:', err);
-    showErrorBanner(err.message || 'Unexpected error. Check the console.');
-  } finally {
-    setLoading(false);
-  }
-}
-
-function setCompareLoading(loading) {
-  const btn = DOM.compareBtn;
-  if (loading) {
-    btn.classList.add('loading');
-    btn.disabled = true;
-  } else {
-    btn.classList.remove('loading');
-    btn.disabled = false;
-  }
-}
-
-async function handleCompare() {
-  const a = DOM.comparePromptA.value.trim();
-  const b = DOM.comparePromptB.value.trim();
-  if (!a || !b) {
-    showErrorBanner('Enter both prompts to compare.');
-    return;
-  }
-  const model = DOM.modelSelect.value;
-  setCompareLoading(true);
-  DOM.compareColA.classList.remove('compare-col-winner');
-  DOM.compareColB.classList.remove('compare-col-winner');
-  try {
-    const res = await fetch('/api/compare', {
+    await ensureSession();
+    const body = { prompt, model };
+    if (sessionId) body.session_id = sessionId;
+    const res = await fetch('/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt_a: a, prompt_b: b, model }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `HTTP ${res.status}`);
     }
-    const d = await res.json();
-    const w = d.more_cost_efficient;
-    if (w === 'A') DOM.compareColA.classList.add('compare-col-winner');
-    if (w === 'B') DOM.compareColB.classList.add('compare-col-winner');
-
-    DOM.compareWinner.textContent =
-      w === 'tie' ? 'Same token count — tie' : `Prompt ${w} is more cost-efficient (fewer input tokens)`;
-    DOM.compareMetrics.innerHTML = `
-<div>Prompt A — ${d.prompt_a.tokens.toLocaleString()} tokens · $${d.prompt_a.cost_usd.toFixed(8)} · $${d.prompt_a.cost_per_1k_tokens_usd.toFixed(8)} / 1K</div>
-<div>Prompt B — ${d.prompt_b.tokens.toLocaleString()} tokens · $${d.prompt_b.cost_usd.toFixed(8)} · $${d.prompt_b.cost_per_1k_tokens_usd.toFixed(8)} / 1K</div>
-<div>Δ tokens: ${Number(d.token_difference).toLocaleString()} · Δ cost: $${Number(d.cost_difference_usd).toFixed(10)}</div>
-<div>${d.summary}</div>`;
-    DOM.compareSummary.hidden = false;
+    const data = await res.json();
+    lastAnalysis = data;
+    renderAnalyzer(data);
   } catch (e) {
-    showErrorBanner(e.message || 'Compare failed');
+    console.error(e);
+    showToast(e.message || 'Analysis failed');
   } finally {
-    setCompareLoading(false);
+    btn.classList.remove('loading');
+    btn.disabled = false;
   }
 }
 
-async function handleExportPdf() {
-  if (!lastAnalysis) {
-    showErrorBanner('Run analysis first to build a report.');
-    return;
-  }
-  const btn = DOM.downloadReportBtn;
+async function exportPdf() {
+  if (!lastAnalysis) return;
+  const btn = $('download-pdf-btn');
   btn.disabled = true;
-  btn.classList.add('loading');
   try {
-    let conversationMessages = null;
-    if (sessionId) {
-      const r = await fetch(`/api/session/${encodeURIComponent(sessionId)}`);
-      if (r.ok) {
-        const snap = await r.json();
-        conversationMessages = snap.messages || null;
-      }
-    }
     const body = {
       prompt: lastAnalysis.prompt,
-      trimmed_prompt: lastAnalysis.trimmed_prompt,
+      trimmed_prompt: lastAnalysis.trimmed_prompt || lastAnalysis.optimized_prompt,
       model: lastAnalysis.model,
       original_tokens: lastAnalysis.original_tokens,
       trimmed_tokens: lastAnalysis.trimmed_tokens,
@@ -772,169 +318,256 @@ async function handleExportPdf() {
       savings_percentage: lastAnalysis.savings_percentage,
       token_data: lastAnalysis.token_data,
       tfidf_top_terms: lastAnalysis.tfidf_top_terms,
-      conversation_messages: conversationMessages,
+      pos_tags: lastAnalysis.pos_tags,
+      noise_level: lastAnalysis.noise_level,
+      noise_words: lastAnalysis.noise_words,
+      efficiency_score: lastAnalysis.efficiency_score,
+      repetition: lastAnalysis.repetition,
     };
     const res = await fetch('/api/export', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `HTTP ${res.status}`);
-    }
+    if (!res.ok) throw new Error('PDF failed');
     const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
+    a.href = URL.createObjectURL(blob);
     a.download = 'tokenscope_report.pdf';
     a.click();
-    URL.revokeObjectURL(url);
+    URL.revokeObjectURL(a.href);
   } catch (e) {
-    showErrorBanner(e.message || 'PDF export failed');
+    showToast(e.message || 'PDF error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function exportJson() {
+  if (!lastAnalysis) return;
+  const blob = new Blob([JSON.stringify(lastAnalysis, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'tokenscope_analysis.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function handleCompare() {
+  const a = $('cmp-input-a').value.trim();
+  const b = $('cmp-input-b').value.trim();
+  if (!a || !b) {
+    showToast('Both prompts required.');
+    return;
+  }
+  const model = $('global-model').value;
+  const btn = $('compare-btn');
+  btn.classList.add('loading');
+  btn.disabled = true;
+  $('cmp-a').classList.remove('winner');
+  $('cmp-b').classList.remove('winner');
+  try {
+    const res = await fetch('/api/compare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt_a: a, prompt_b: b, model }),
+    });
+    if (!res.ok) throw new Error('Compare failed');
+    const d = await res.json();
+    const w = d.more_cost_efficient;
+    if (w === 'A') $('cmp-a').classList.add('winner');
+    if (w === 'B') $('cmp-b').classList.add('winner');
+    const out = $('compare-out');
+    out.classList.add('visible');
+    out.innerHTML = `
+      <div class="win">${w === 'tie' ? 'Tie — same token cost' : `More cost-efficient: Prompt ${w}`}</div>
+      <div>A: ${d.prompt_a.tokens} tok · ${formatUSD(d.prompt_a.cost_usd)} · rep ${(d.prompt_a.repetition_rate * 100).toFixed(1)}% · diversity ${d.prompt_a.lexical_diversity}</div>
+      <div>B: ${d.prompt_b.tokens} tok · ${formatUSD(d.prompt_b.cost_usd)} · rep ${(d.prompt_b.repetition_rate * 100).toFixed(1)}% · diversity ${d.prompt_b.lexical_diversity}</div>
+      <div>Δ tokens: ${d.token_difference} · Δ cost: ${formatUSD(d.cost_difference_usd)}</div>`;
+  } catch (e) {
+    showToast(e.message);
   } finally {
     btn.classList.remove('loading');
     btn.disabled = false;
   }
 }
 
-/* ════════════════════════════════════════════
-   ERROR BANNER
-   ════════════════════════════════════════════ */
-function showErrorBanner(message) {
-  let banner = document.getElementById('ts-error-banner');
-  if (!banner) {
-    banner = document.createElement('div');
-    banner.id = 'ts-error-banner';
-    Object.assign(banner.style, {
-      position:     'fixed',
-      bottom:       '1.5rem',
-      left:         '50%',
-      transform:    'translateX(-50%)',
-      background:   'rgba(239,68,68,0.15)',
-      border:       '1px solid rgba(239,68,68,0.4)',
-      color:        '#fca5a5',
-      borderRadius: '12px',
-      padding:      '0.75rem 1.5rem',
-      fontSize:     '0.875rem',
-      fontFamily:   'var(--font-sans)',
-      zIndex:       '9999',
-      backdropFilter: 'blur(12px)',
-      boxShadow:    '0 8px 32px rgba(0,0,0,0.4)',
-      maxWidth:     '90vw',
-      textAlign:    'center',
+async function refreshConversation() {
+  if (!sessionId) await ensureSession();
+  if (!sessionId) return;
+  const model = $('global-model').value;
+  try {
+    const r = await fetch(`/api/session/${encodeURIComponent(sessionId)}/conversation?model=${encodeURIComponent(model)}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    $('cv-msgs').textContent = String(d.message_count);
+    $('cv-user').textContent = d.user_tokens.toLocaleString();
+    $('cv-asst').textContent = d.assistant_tokens.toLocaleString();
+    $('cv-total').textContent = d.total_tokens.toLocaleString();
+    $('cv-cost').textContent = formatUSD(d.estimated_cost_usd);
+    $('cv-saved').textContent = (d.tokens_saved || 0).toLocaleString();
+    const th = $('conv-thread');
+    th.innerHTML = '';
+    (d.messages || []).forEach((m) => {
+      const div = document.createElement('div');
+      div.className = `conv-msg ${m.role}`;
+      div.innerHTML = `<div>${escapeHtml(m.content)}</div><div class="conv-msg-meta">${m.role} · ${m.tokens} tok</div>`;
+      th.appendChild(div);
     });
-    document.body.appendChild(banner);
+  } catch (e) {
+    console.warn(e);
   }
-  banner.textContent = `⚠ ${message}`;
-  banner.style.opacity = '1';
-  clearTimeout(banner._timeout);
-  banner._timeout = setTimeout(() => { banner.style.opacity = '0'; }, 5000);
 }
 
-/* ════════════════════════════════════════════
-   COPY BUTTON
-   ════════════════════════════════════════════ */
-function handleCopy() {
-  const text = DOM.trimmedTextDisplay.textContent;
-  if (!text || DOM.trimComparison.hidden) return;
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
 
-  navigator.clipboard.writeText(text).then(() => {
-    const origHTML = DOM.copyBtn.innerHTML;
-    DOM.copyBtn.innerHTML = `
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
-        <polyline points="20 6 9 17 4 12"/>
-      </svg> Copied!`;
-    DOM.copyBtn.style.color       = 'var(--green)';
-    DOM.copyBtn.style.borderColor = 'rgba(16,185,129,0.4)';
-    setTimeout(() => {
-      DOM.copyBtn.innerHTML         = origHTML;
-      DOM.copyBtn.style.color       = '';
-      DOM.copyBtn.style.borderColor = '';
-    }, 2200);
-  }).catch(() => {
-    // Fallback for older browsers
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
+async function addConversationMessage() {
+  const content = $('conv-input').value.trim();
+  if (!content) return;
+  if (!sessionId) await ensureSession();
+  if (!sessionId) {
+    showToast('No session');
+    return;
+  }
+  const model = $('global-model').value;
+  const role = $('conv-role').value;
+  try {
+    const res = await fetch('/api/conversation/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, role, content, model }),
+    });
+    if (!res.ok) throw new Error('Failed to add');
+    $('conv-input').value = '';
+    await refreshConversation();
+  } catch (e) {
+    showToast(e.message);
+  }
+}
+
+async function clearConversation() {
+  if (!sessionId) return;
+  try {
+    const res = await fetch('/api/conversation/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+    if (!res.ok) throw new Error('Clear failed');
+    await refreshConversation();
+  } catch (e) {
+    showToast(e.message);
+  }
+}
+
+async function refreshHistory() {
+  if (!sessionId) await ensureSession();
+  if (!sessionId) return;
+  try {
+    const r = await fetch(`/api/history/${encodeURIComponent(sessionId)}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    const t = d.totals || {};
+    $('hs-orig').textContent = (t.total_original || 0).toLocaleString();
+    $('hs-trim').textContent = (t.total_trimmed || 0).toLocaleString();
+    $('hs-saved').textContent = (t.total_saved || 0).toLocaleString();
+    $('hs-avg').textContent = `${t.avg_savings_pct ?? 0}%`;
+
+    const runs = d.runs || d.query_history || [];
+    $('hist-empty').style.display = runs.length ? 'none' : 'block';
+    const tb = $('hist-tbody');
+    tb.innerHTML = '';
+    chartHist = destroyChart(chartHist);
+    if (!runs.length) return;
+    runs.forEach((row) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${row.query_id}</td>
+        <td>${escapeHtml((row.prompt_preview || '').slice(0, 60))}</td>
+        <td>${escapeHtml(row.model || '')}</td>
+        <td>${row.original_tokens ?? row.tokens_used ?? '—'}</td>
+        <td>${row.trimmed_tokens ?? '—'}</td>
+        <td>${row.saved_tokens ?? '—'}</td>
+        <td>${row.savings_pct ?? '—'}%</td>`;
+      tb.appendChild(tr);
+    });
+
+    const ctx = $('chart-history').getContext('2d');
+    const labels = runs.map((x) => `#${x.query_id}`);
+    const o = runs.map((x) => x.original_tokens ?? x.tokens_used ?? 0);
+    const tr = runs.map((x) => x.trimmed_tokens ?? 0);
+    const sv = runs.map((x) => x.saved_tokens ?? 0);
+    chartHist = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Original', data: o, borderColor: 'rgba(99, 102, 241, 1)', tension: 0.25, fill: false },
+          { label: 'Trimmed', data: tr, borderColor: 'rgba(34, 211, 238, 1)', tension: 0.25, fill: false },
+          { label: 'Saved', data: sv, borderColor: 'rgba(52, 211, 153, 1)', tension: 0.25, fill: false },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#8b93a7' } } },
+        scales: {
+          x: { ticks: { color: '#8b93a7' }, grid: { color: 'rgba(255,255,255,0.04)' } },
+          y: { beginAtZero: true, ticks: { color: '#8b93a7' }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        },
+      },
+    });
+  } catch (e) {
+    console.warn(e);
+  }
+}
+
+function updatePricingBar() {
+  const m = $('global-model').value;
+  const p = modelPricing[m];
+  const el = $('pricing-info');
+  if (!p || !el) return;
+  const names = { 'gpt-4o-mini': 'GPT-4o Mini', 'gpt-4o': 'GPT-4o', 'gpt-3.5-turbo': 'GPT-3.5 Turbo' };
+  el.textContent = `${names[m] || m} — in $${p.input}/1M · out $${p.output}/1M`;
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  document.querySelectorAll('.dash-tab').forEach((b) => {
+    b.addEventListener('click', () => setTab(b.dataset.tab));
   });
-}
 
-/* ════════════════════════════════════════════
-   EXAMPLE CHIPS
-   ════════════════════════════════════════════ */
-function initChips() {
-  document.querySelectorAll('.chip').forEach((chip) => {
-    chip.addEventListener('click', () => {
-      const example = chip.dataset.example;
-      if (!example) return;
-      DOM.promptInput.value = example;
-      DOM.promptInput.dispatchEvent(new Event('input')); // update char count
-      DOM.promptInput.focus();
+  $('analyze-btn').addEventListener('click', handleAnalyze);
+  $('download-pdf-btn').addEventListener('click', exportPdf);
+  $('download-json-btn').addEventListener('click', exportJson);
+  $('compare-btn').addEventListener('click', handleCompare);
+  $('conv-add-btn').addEventListener('click', addConversationMessage);
+  $('conv-clear-btn').addEventListener('click', clearConversation);
+  $('copy-opt-btn').addEventListener('click', () => {
+    const t = $('optimized-text').textContent;
+    if (t) navigator.clipboard.writeText(t);
+  });
+  $('global-model').addEventListener('change', updatePricingBar);
+
+  document.querySelectorAll('.chip').forEach((c) => {
+    c.addEventListener('click', () => {
+      $('prompt-input').value = c.dataset.example || '';
     });
   });
-}
-
-/* ════════════════════════════════════════════
-   LIVE CHARACTER COUNT
-   ════════════════════════════════════════════ */
-function initCharCounter() {
-  DOM.promptInput.addEventListener('input', () => {
-    const len = DOM.promptInput.value.length;
-    DOM.charCount.textContent = len.toLocaleString();
-    // Rough token estimate: ~4 chars per token
-    const estimatedTokens = Math.round(len / 4);
-    DOM.charCount.title = `~${estimatedTokens.toLocaleString()} estimated tokens`;
-  });
-}
-
-/* ════════════════════════════════════════════
-   MODEL SELECT
-   ════════════════════════════════════════════ */
-function initModelSelect() {
-  DOM.modelSelect.addEventListener('change', () => {
-    updatePricingBar(DOM.modelSelect.value);
-  });
-}
-
-/* ════════════════════════════════════════════
-   KEYBOARD SHORTCUT (Ctrl/Cmd + Enter)
-   ════════════════════════════════════════════ */
-function initKeyboardShortcut() {
-  DOM.promptInput.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      handleAnalyze();
-    }
-  });
-}
-
-/* ════════════════════════════════════════════
-   INITIALISE
-   ════════════════════════════════════════════ */
-document.addEventListener('DOMContentLoaded', async () => {
-  DOM.analyzeBtn.addEventListener('click', handleAnalyze);
-  DOM.copyBtn.addEventListener('click', handleCopy);
-  DOM.resetSessionBtn.addEventListener('click', handleResetSession);
-  DOM.compareBtn.addEventListener('click', handleCompare);
-  DOM.downloadReportBtn.addEventListener('click', handleExportPdf);
-
-  initChips();
-  initCharCounter();
-  initModelSelect();
-  initKeyboardShortcut();
-
-  await fetchModels();
 
   try {
-    await ensureSession();
-  } catch (e) {
-    console.error(e);
-    showErrorBanner('Session init failed — you can still analyze; refresh if the UI acts oddly.');
-  }
+    const r = await fetch('/api/models');
+    const d = await r.json();
+    modelPricing = d.models || {};
+  } catch (_) {}
+  updatePricingBar();
 
-  console.info('[TokenScope] Ready. Ctrl+Enter to analyze. Session in localStorage:', STORAGE_KEY);
+  await ensureSession();
+
+  $('prompt-input').addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleAnalyze();
+  });
 });
